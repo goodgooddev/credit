@@ -1,0 +1,18 @@
+@import "tailwindcss";
+
+/* Задаем кастомные цвета для Tailwind v4 */
+@theme {
+  --color-alfa-red: #EF3124;      /* Фирменный красный */
+  --color-alfa-red-hover: #D0281D;
+  --color-alfa-bg: #F4F5F7;       /* Светло-серый фон */
+  --color-alfa-text: #1A1A1A;     /* Темный текст */
+  --color-alfa-gray: #7A7A7A;     /* Серый для подписей */
+}
+
+/* Принудительно задаем светлую тему для body */
+body {
+  background-color: var(--color-alfa-bg);
+  color: var(--color-alfa-text);
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+  -webkit-font-smoothing: antialiased;
+}
