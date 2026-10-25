@@ -20,6 +20,7 @@ export const ApplicationForm = () => {
   const [annualRevenue, setAnnualRevenue] = useState('');
   const [monthlyExpenses, setMonthlyExpenses] = useState('');
   const [existingDebt, setExistingDebt] = useState('0');
+  const [monthlyDebtPayment, setMonthlyDebtPayment] = useState('');
   
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
@@ -46,6 +47,7 @@ export const ApplicationForm = () => {
           setAnnualRevenue(draft.annual_revenue || '');
           setMonthlyExpenses(draft.monthly_expenses || '');
           setExistingDebt(draft.existing_debt || '0');
+          setMonthlyDebtPayment(draft.monthly_debt_payment ?? '');
         } else {
           setAmount(p.min_amount);
           setTerm(String(p.min_term_months));
@@ -96,7 +98,8 @@ export const ApplicationForm = () => {
         purpose,
         annual_revenue: annualRevenue,
         monthly_expenses: monthlyExpenses,
-        existing_debt: existingDebt
+        existing_debt: existingDebt,
+        monthly_debt_payment: monthlyDebtPayment.trim() === '' ? null : monthlyDebtPayment
       };
       
       let currentId = appId;
@@ -178,6 +181,15 @@ export const ApplicationForm = () => {
             {errors.purpose && <p className="text-red-500 text-xs mt-1">{errors.purpose}</p>}
           </div>
 
+          <div>
+            <label className="block text-sm font-medium mb-1">Ежемесячный платёж по действующим кредитам, ₽</label>
+            <input type="number" min="0" step="0.01"
+              className="w-full p-2 border rounded-lg"
+              value={monthlyDebtPayment} onChange={e => setMonthlyDebtPayment(e.target.value)} />
+            <p className="text-xs text-gray-500 mt-1">Укажите 0, если платежей сейчас нет. При наличии долга без этой суммы потребуется уточнение.</p>
+            {errors.monthly_debt_payment && <p className="text-red-500 text-xs mt-1">{errors.monthly_debt_payment}</p>}
+          </div>
+
           {/* Новые поля для скоринга */}
           <div className="border-t pt-4 mt-4">
             <h3 className="text-sm font-semibold text-gray-700 mb-3">Финансовые показатели</h3>
@@ -195,7 +207,7 @@ export const ApplicationForm = () => {
               </div>
 
               <div>
-                <label className="block text-sm font-medium mb-1">Ежемесячные расходы, ₽</label>
+                <label className="block text-sm font-medium mb-1">Ежемесячные расходы без платежей по кредитам, ₽</label>
                 <input
                   type="number"
                   className={`w-full p-2 border rounded-lg ${errors.monthly_expenses ? 'border-red-500' : 'border-gray-300'}`}
@@ -239,9 +251,9 @@ export const ApplicationForm = () => {
               ✓
             </div>
             <h3 className="text-xl font-bold mb-2">Заявка отправлена!</h3>
-            <p className="text-gray-500 mb-6">Ваша заявка находится на рассмотрении. Мы уведомим вас о решении.</p>
-            <Button className="w-full" onClick={() => navigate('/profile')}>
-              Перейти к моим заявкам
+            <p className="text-gray-500 mb-6">Результат обработки и необходимые уточнения доступны на странице заявки.</p>
+            <Button className="w-full" onClick={() => navigate(`/result/${appId}`)}>
+              Посмотреть результат
             </Button>
           </Card>
         </div>

@@ -6,7 +6,7 @@
 from datetime import date, datetime
 from decimal import Decimal
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 from app.models import ApplicationStatus, UserRole
 
@@ -74,6 +74,12 @@ class ApplicationFields(BaseModel):
     annual_revenue: Money | None = Field(default=None, ge=0, max_digits=14, decimal_places=2)
     monthly_expenses: Money | None = Field(default=None, ge=0, max_digits=14, decimal_places=2)
     existing_debt: Money | None = Field(default=None, ge=0, max_digits=14, decimal_places=2)
+    monthly_debt_payment: Money | None = Field(default=None, ge=0, max_digits=14, decimal_places=2)
+
+    @field_validator("purpose", mode="before")
+    @classmethod
+    def normalize_purpose(cls, value):
+        return value.strip() if isinstance(value, str) else value
 
 
 class ApplicationCreate(ApplicationFields):
@@ -94,6 +100,7 @@ class ApplicationOut(ORMModel):
     annual_revenue: Money | None
     monthly_expenses: Money | None
     existing_debt: Money | None
+    monthly_debt_payment: Money | None
     status: ApplicationStatus
     risk_level: str | None
     decision: str | None
@@ -108,6 +115,7 @@ class AssessmentOut(ORMModel):
     risk_level: str | None
     decision: str | None
     reasons: list[str]
+    requested_fields: list[str] = Field(default_factory=list)
     offered_conditions: dict | None
     rules_version: str
     created_at: datetime

@@ -12,6 +12,7 @@ from app.models import (
     Application,
     ApplicationStatus,
     Company,
+    Decision,
     EventType,
     Product,
     User,
@@ -25,6 +26,7 @@ from app.schemas import (
     EventOut,
 )
 from app.services.checks import validate_application
+from app.services.decisions import review_application
 from app.services.events import add_event
 
 router = APIRouter(prefix="/applications", tags=["applications"])
@@ -78,7 +80,10 @@ def create_application(
     _check_product(db, fields.get("product_id"))
 
     application = Application(
-        user_id=user.id, company_id=company.id, status=ApplicationStatus.DRAFT.value, **fields
+        user_id=user.id,
+        company_id=company.id,
+        status=ApplicationStatus.DRAFT.value,
+        **fields,
     )
     db.add(application)
     db.flush()  # получаем application.id
@@ -148,9 +153,13 @@ def submit_application(
     user: User = Depends(require_client),
     db: Session = Depends(get_db),
 ):
-    """Отправить заявку. Повторная отправка -> 409, второго решения не появится.
+    """Отправить заявку и сразу получить решение.
 
-    ВАЖНО: пока решение не реализовано (этап 3), заявка переходит в статус `submitted`.
+    Цепочка: validate_application -> run_checks -> calculate_risk -> make_decision -> сохранение.
+    Всё в одной транзакции под блокировкой строки: если что-то упало, заявка остаётся как была.
+    Повторная отправка -> 409, второго решения не появится.
+    Итоговый статус: approved / rejected / needs_info; если проверки недоступны — остаётся submitted
+    (тогда помогает POST .../reprocess).
     """
     application = _get_application(db, application_id, user, lock=True)
     _ensure_editable(application)
@@ -170,6 +179,62 @@ def submit_application(
         user,
         from_status=previous_status,
         to_status=application.status,
+    )
+    review_application(
+        db,
+        application,
+        product,
+        application.company,
+        as_of=application.submitted_at.date(),
+    )
+    db.commit()
+    db.refresh(application)
+    return application
+
+
+@router.post("/{application_id}/reprocess", response_model=ApplicationDetail)
+def reprocess_application(
+    application_id: int,
+    user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    """Повторить обработку, если проверки были недоступны (последняя оценка — check_unavailable).
+
+    Доступно владельцу и сотруднику. В остальных случаях -> 409: уже вынесенное решение
+    повторно не пересматривается. Создаётся новая оценка, старая остаётся в истории.
+    """
+    application = _get_application(db, application_id, user, lock=True)
+    latest = application.latest_assessment
+    if (
+        application.status != ApplicationStatus.SUBMITTED.value
+        or latest is None
+        or latest.decision != Decision.CHECK_UNAVAILABLE.value
+    ):
+        raise HTTPException(
+            status_code=409,
+            detail="Повторная обработка возможна, только если проверки заявки были недоступны",
+        )
+
+    product = db.get(Product, application.product_id)
+    errors = validate_application(application, product)
+    if errors:
+        raise FieldValidationError(errors, "Заявка заполнена не полностью")
+
+    add_event(
+        db,
+        application,
+        EventType.REPROCESSED,
+        user,
+        from_status=application.status,
+        to_status=application.status,
+    )
+    # as_of берём из даты отправки: результат не зависит от того, когда нажали «повторить»
+    review_application(
+        db,
+        application,
+        product,
+        application.company,
+        as_of=application.submitted_at.date(),
     )
     db.commit()
     db.refresh(application)

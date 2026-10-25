@@ -42,10 +42,28 @@ class ApplicationStatus(enum.StrEnum):
 EDITABLE_STATUSES = (ApplicationStatus.DRAFT, ApplicationStatus.NEEDS_INFO)
 
 
+class Decision(enum.StrEnum):
+    """Итог рассмотрения (applications.decision и assessments.decision)."""
+
+    APPROVED = "approved"
+    REJECTED = "rejected"
+    NEEDS_INFO = "needs_info"
+    # Проверку выполнить не удалось. Это НЕ отказ: заявка остаётся submitted, обработку можно повторить
+    CHECK_UNAVAILABLE = "check_unavailable"
+
+
+class RiskLevel(enum.StrEnum):
+    LOW = "low"
+    MEDIUM = "medium"
+    HIGH = "high"
+
+
 class EventType(enum.StrEnum):
     CREATED = "created"
     UPDATED = "updated"
     SUBMITTED = "submitted"
+    ASSESSED = "assessed"  # система вынесла решение (создана запись Assessment)
+    REPROCESSED = "reprocessed"  # повторный запуск обработки после недоступной проверки
 
 
 class User(Base):
@@ -98,10 +116,26 @@ class Application(Base):
     __tablename__ = "applications"
     __table_args__ = (
         CheckConstraint("amount IS NULL OR amount > 0", name="ck_applications_amount_positive"),
-        CheckConstraint("term_months IS NULL OR term_months > 0", name="ck_applications_term_positive"),
-        CheckConstraint("annual_revenue IS NULL OR annual_revenue >= 0", name="ck_applications_revenue_nonneg"),
-        CheckConstraint("monthly_expenses IS NULL OR monthly_expenses >= 0", name="ck_applications_expenses_nonneg"),
-        CheckConstraint("existing_debt IS NULL OR existing_debt >= 0", name="ck_applications_debt_nonneg"),
+        CheckConstraint(
+            "term_months IS NULL OR term_months > 0",
+            name="ck_applications_term_positive",
+        ),
+        CheckConstraint(
+            "annual_revenue IS NULL OR annual_revenue >= 0",
+            name="ck_applications_revenue_nonneg",
+        ),
+        CheckConstraint(
+            "monthly_expenses IS NULL OR monthly_expenses >= 0",
+            name="ck_applications_expenses_nonneg",
+        ),
+        CheckConstraint(
+            "existing_debt IS NULL OR existing_debt >= 0",
+            name="ck_applications_debt_nonneg",
+        ),
+        CheckConstraint(
+            "monthly_debt_payment IS NULL OR monthly_debt_payment >= 0",
+            name="ck_applications_debt_payment_nonneg",
+        ),
         Index("ix_applications_user_status", "user_id", "status"),
     )
 
@@ -117,6 +151,7 @@ class Application(Base):
     annual_revenue: Mapped[Decimal | None] = mapped_column(Numeric(14, 2))
     monthly_expenses: Mapped[Decimal | None] = mapped_column(Numeric(14, 2))
     existing_debt: Mapped[Decimal | None] = mapped_column(Numeric(14, 2))
+    monthly_debt_payment: Mapped[Decimal | None] = mapped_column(Numeric(14, 2))
 
     # Поля, которые меняет ТОЛЬКО сервер (клиент передать их не может)
     status: Mapped[str] = mapped_column(String(32), default=ApplicationStatus.DRAFT.value, index=True)
@@ -131,9 +166,7 @@ class Application(Base):
 
     company: Mapped[Company] = relationship()
     product: Mapped[Product | None] = relationship()
-    assessments: Mapped[list["Assessment"]] = relationship(
-        back_populates="application", order_by="Assessment.id"
-    )
+    assessments: Mapped[list["Assessment"]] = relationship(back_populates="application", order_by="Assessment.id")
     events: Mapped[list["ApplicationEvent"]] = relationship(
         back_populates="application", order_by="ApplicationEvent.id"
     )
@@ -160,6 +193,10 @@ class Assessment(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
     application: Mapped[Application] = relationship(back_populates="assessments")
+
+    @property
+    def requested_fields(self) -> list[str]:
+        return (self.check_results or {}).get("requested_fields", [])
 
 
 class ApplicationEvent(Base):

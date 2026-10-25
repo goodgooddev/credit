@@ -22,6 +22,8 @@ export const Result = () => {
   const [events, setEvents] = useState<Event[]>([]);
   const [user, setUser] = useState<User | null>(null);
   const [loading, setLoading] = useState(true);
+  const [retrying, setRetrying] = useState(false);
+  const [retryError, setRetryError] = useState('');
 
   useEffect(() => {
     setUser(api.getCurrentUser());
@@ -76,7 +78,7 @@ export const Result = () => {
         <Card className="bg-red-50 border-red-200">
           <h3 className="text-lg font-bold text-red-800 mb-2">К сожалению, заявка отклонена</h3>
           <p className="text-red-700 mb-4">
-            {app.decision ? `Причина: ${app.decision}` : 'Банк принял решение об отказе без указания причины.'}
+            {app.latest_assessment?.reasons.join(' ') || 'Причина решения не указана.'}
           </p>
           <Link to="/">
             <Button variant="secondary" className="w-full">Выбрать другой продукт</Button>
@@ -89,7 +91,7 @@ export const Result = () => {
         <Card className="bg-orange-50 border-orange-200">
           <h3 className="text-lg font-bold text-orange-800 mb-2">Требуются уточнения</h3>
           <p className="text-orange-700 mb-4">
-            Банку не хватает информации для принятия решения. Пожалуйста, дополните заявку.
+            {app.latest_assessment?.reasons.join(' ') || 'Пожалуйста, дополните заявку.'}
           </p>
           <Button 
             className="w-full" 
@@ -97,6 +99,34 @@ export const Result = () => {
           >
             Дополнить заявку
           </Button>
+        </Card>
+      )}
+
+      {app.latest_assessment?.offered_conditions && (
+        <Card>
+          <h3 className="font-bold mb-3">Одобренные условия</h3>
+          <p>Ставка: {app.latest_assessment.offered_conditions.annual_rate}% годовых</p>
+          <p>Ежемесячный платёж: {Number(app.latest_assessment.offered_conditions.monthly_payment).toLocaleString('ru-RU')} ₽</p>
+          {app.latest_assessment.reasons.map((reason, index) => <p key={index} className="mt-2 text-sm">{reason}</p>)}
+        </Card>
+      )}
+
+      {app.decision === 'check_unavailable' && (
+        <Card>
+          <h3 className="font-bold mb-3">Проверка временно недоступна</h3>
+          <p className="mb-4">{app.latest_assessment?.reasons.join(' ')}</p>
+          <Button disabled={retrying} onClick={async () => {
+            setRetrying(true);
+            setRetryError('');
+            try {
+              const updated = await api.reprocessApplication(app.id);
+              setApp(updated);
+              setEvents(await api.getApplicationEvents(app.id));
+            } catch (error) {
+              setRetryError(error instanceof Error ? error.message : 'Не удалось повторить проверку');
+            } finally { setRetrying(false); }
+          }}>{retrying ? 'Проверяем…' : 'Повторить проверку'}</Button>
+          {retryError && <p className="text-red-500 mt-2">{retryError}</p>}
         </Card>
       )}
 

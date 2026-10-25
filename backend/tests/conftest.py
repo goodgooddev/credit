@@ -12,17 +12,20 @@ TEST_DB = os.environ.get("TEST_DATABASE_URL")
 if TEST_DB:
     # Должно быть выставлено ДО импорта приложения
     os.environ["DATABASE_URL"] = TEST_DB
-os.environ.setdefault("SECRET_KEY", "test-secret-key-that-is-long-enough-32b")
+os.environ["SECRET_KEY"] = "test-secret-key-that-is-long-enough-32b"
+os.environ["SEED_PASSWORD"] = "demo12345"
+
 
 def pytest_collection_modifyitems(config, items):
     if TEST_DB:
         return
     skip = pytest.mark.skip(reason="TEST_DATABASE_URL не задан")
     for item in items:
-        item.add_marker(skip)
+        if "integration" in item.keywords:
+            item.add_marker(skip)
 
 
-@pytest.fixture(scope="session", autouse=True)
+@pytest.fixture(scope="session")
 def _database():
     if not TEST_DB:
         yield
@@ -48,10 +51,11 @@ def _database():
 
 
 @pytest.fixture(autouse=True)
-def _clean_applications(_database):
-    if not TEST_DB:
+def _clean_applications(request):
+    if "integration" not in request.node.keywords or not TEST_DB:
         yield
         return
+    request.getfixturevalue("_database")
     from sqlalchemy import text
 
     from app.database import engine

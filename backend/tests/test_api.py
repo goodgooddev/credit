@@ -1,5 +1,9 @@
 from concurrent.futures import ThreadPoolExecutor
 
+import pytest
+
+pytestmark = pytest.mark.integration
+
 from sqlalchemy import func, select
 
 from tests.conftest import FULL
@@ -42,7 +46,11 @@ def test_partial_draft_persists(client, client1, company1_id):
 
 
 def test_negative_amount_gives_clear_error(client, client1, company1_id):
-    r = client.post("/applications", headers=client1, json={"company_id": company1_id, "amount": "-5"})
+    r = client.post(
+        "/applications",
+        headers=client1,
+        json={"company_id": company1_id, "amount": "-5"},
+    )
     assert r.status_code == 422
     body = r.json()
     assert body["errors"][0]["field"] == "amount"
@@ -51,7 +59,12 @@ def test_negative_amount_gives_clear_error(client, client1, company1_id):
 
 def test_client_cannot_set_server_fields(client, client1, company1_id):
     draft = create_draft(client, client1, company1_id)
-    for forbidden in ({"status": "approved"}, {"risk_level": "low"}, {"decision": "approved"}, {"user_id": 99}):
+    for forbidden in (
+        {"status": "approved"},
+        {"risk_level": "low"},
+        {"decision": "approved"},
+        {"user_id": 99},
+    ):
         r = client.patch(f"/applications/{draft['id']}", headers=client1, json=forbidden)
         assert r.status_code == 422, forbidden
     assert client.get(f"/applications/{draft['id']}", headers=client1).json()["status"] == "draft"
@@ -97,7 +110,13 @@ def test_submit_incomplete_lists_missing_fields(client, client1, company1_id):
 
 
 def test_submit_checks_product_limits(client, client1, company1_id, product_id):
-    draft = create_draft(client, client1, company1_id, product_id=product_id, **{**FULL, "amount": "50000"})
+    draft = create_draft(
+        client,
+        client1,
+        company1_id,
+        product_id=product_id,
+        **{**FULL, "amount": "50000"},
+    )
     r = client.post(f"/applications/{draft['id']}/submit", headers=client1)
     assert r.status_code == 422
     assert r.json()["errors"][0]["field"] == "amount"
@@ -107,10 +126,11 @@ def test_submit_and_history(client, client1, company1_id, product_id):
     draft = create_draft(client, client1, company1_id, product_id=product_id, **FULL)
     r = client.post(f"/applications/{draft['id']}/submit", headers=client1)
     assert r.status_code == 200
-    assert r.json()["status"] == "submitted"
+    # у Ромашки-Торг хорошая история и FULL-данные: решение выносится сразу при отправке
+    assert r.json()["status"] == "approved"
     events = client.get(f"/applications/{draft['id']}/events", headers=client1).json()
-    assert [e["event_type"] for e in events] == ["created", "submitted"]
-    # после отправки редактировать нельзя
+    assert [e["event_type"] for e in events] == ["created", "submitted", "assessed"]
+    # после решения редактировать нельзя
     assert client.patch(f"/applications/{draft['id']}", headers=client1, json={"amount": "1000"}).status_code == 409
 
 
@@ -121,6 +141,7 @@ def test_double_submit_is_rejected(client, client1, company1_id, product_id):
     assert client.post(url, headers=client1).status_code == 409
     events = client.get(f"/applications/{draft['id']}/events", headers=client1).json()
     assert [e["event_type"] for e in events].count("submitted") == 1
+    assert [e["event_type"] for e in events].count("assessed") == 1  # второго решения нет
 
 
 def test_concurrent_submit_only_one_wins(client, client1, company1_id, product_id):
@@ -128,10 +149,13 @@ def test_concurrent_submit_only_one_wins(client, client1, company1_id, product_i
     draft = create_draft(client, client1, company1_id, product_id=product_id, **FULL)
     url = f"/applications/{draft['id']}/submit"
     with ThreadPoolExecutor(max_workers=2) as pool:
-        codes = sorted(f.result().status_code for f in [pool.submit(client.post, url, headers=client1) for _ in range(2)])
+        codes = sorted(
+            f.result().status_code for f in [pool.submit(client.post, url, headers=client1) for _ in range(2)]
+        )
     assert codes == [200, 409]
     events = client.get(f"/applications/{draft['id']}/events", headers=client1).json()
     assert [e["event_type"] for e in events].count("submitted") == 1
+    assert [e["event_type"] for e in events].count("assessed") == 1
 
 
 # ---------- Seed ----------

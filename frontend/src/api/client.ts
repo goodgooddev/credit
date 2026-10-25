@@ -44,6 +44,7 @@ export interface Application {
   annual_revenue: string | null;
   monthly_expenses: string | null;
   existing_debt: string | null;
+  monthly_debt_payment: string | null;
   status: AppStatus;
   risk_level: string | null;
   decision: string | null;
@@ -55,7 +56,16 @@ export interface Application {
 export interface ApplicationDetail extends Application {
   company: Company;
   product: Product | null;
-  latest_assessment: any | null;
+  latest_assessment: {
+    id: number;
+    decision: string;
+    risk_score: number | null;
+    risk_level: string | null;
+    reasons: string[];
+    requested_fields: string[];
+    rules_version: string;
+    offered_conditions: { amount: string; term_months: number; annual_rate: string; monthly_payment: string } | null;
+  } | null;
 }
 
 export interface StaffApplication extends Application {
@@ -155,6 +165,9 @@ export const api = {
       decision: reason || null 
     } as Application;
   },
+
+  reprocessApplication: (id: number) =>
+    request<ApplicationDetail>(`/applications/${id}/reprocess`, { method: 'POST' }),
 
   submitApplication: (id: number) => 
     request<Application>(`/applications/${id}/submit`, { method: 'POST' }),

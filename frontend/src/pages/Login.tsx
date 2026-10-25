@@ -1,5 +1,4 @@
 import React, { useState } from 'react';
-import { Link, useNavigate } from 'react-router-dom';
 import { api } from '../api/client';
 import { Card, Button } from '../components/UI';
 
@@ -8,7 +7,6 @@ export const Login = () => {
   const [password, setPassword] = useState('');
   const [error, setError] = useState('');
   const [loading, setLoading] = useState(false);
-  const navigate = useNavigate();
 
       const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();

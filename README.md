@@ -46,11 +46,45 @@ docker compose up --build
 | GET /applications | клиент | Мои заявки |
 | GET /applications/{id} | владелец / сотрудник | Заявка + результат |
 | PATCH /applications/{id} | владелец | Изменить поля (draft, needs_info) |
-| POST /applications/{id}/submit | владелец | Отправить |
+| POST /applications/{id}/submit | владелец | Отправить и получить решение |
+| POST /applications/{id}/reprocess | владелец / сотрудник | Повторить, если проверки были недоступны |
 | GET /applications/{id}/events | владелец / сотрудник | История |
 | GET /staff/applications | сотрудник | Список для сотрудника |
 
 Статусы заявки: `draft` → `submitted` → (`needs_info` ↔ `submitted`) → `approved` / `rejected` / `counter_offer` → `accepted`.
+Сейчас реализовано до `approved` / `rejected` / `needs_info`; `counter_offer` и `accepted` — этап 4.
+
+## Как принимается решение
+
+`submit` в одной транзакции прогоняет заявку по цепочке `validate_application → run_checks → calculate_risk → make_decision →
+сохранение оценки и событий`. Неполная заявка отвечает `422` и остаётся черновиком. Решение зависит только от данных заявки и
+компании, даты оценки и параметров продукта. Правила версии `2026-10-v2`:
+
+1. Проверка недоступна или вернула некорректные данные → `check_unavailable`: заявка остаётся `submitted`.
+   `POST /applications/{id}/reprocess` повторяет обработку после восстановления данных проверки.
+2. Налоговый долг или 3 и более просрочек 30+ дней → `rejected`.
+3. Есть `existing_debt > 0`, но не заполнен `monthly_debt_payment` → `needs_info`.
+   API возвращает `requested_fields: ["monthly_debt_payment"]`. Клиент указывает ежемесячный платёж по действующим
+   кредитам (можно 0), сохраняет через `PATCH` и повторно отправляет заявку.
+4. Свободного потока (`annual_revenue / 12 - monthly_expenses - monthly_debt_payment`) не хватает на платёж
+   либо балл риска ≥ 50 → `rejected`.
+5. Иначе → `approved` по ставке продукта. Изменённые условия и их принятие относятся к этапу 4.
+
+`monthly_expenses` — операционные расходы **без** платежей по кредитам. При отсутствии задолженности и незаполненном
+`monthly_debt_payment` платёж по существующему долгу считается нулевым. Отсутствие кредитной истории (`credit_history: null`)
+само по себе не вызывает отказ. Отсутствующий ключ или неверный тип ответа означает недоступную проверку.
+
+Балл риска — сумма штрафов: покрытие платежа денежным потоком (до 40), долг к выручке (до 25), сумма к выручке (до 15),
+возраст компании (до 15), нет кредитной истории (15), просрочки (до 30), много кредитов (10), налоговый долг (25).
+Это демонстрационные правила для хакатона; согласование факторов с командой и калибровка модели остаются отдельной задачей.
+
+Каждое рассмотрение сохраняется отдельной записью в `assessments`: входные данные, снимок продукта и компании,
+дата оценки, результаты проверок, риск, запрошенные поля и версия правил. Старые оценки сохраняются.
+Проверяемый ежемесячный платёж совпадает с платежом в одобренных условиях. Отправка, оценка и события сохраняются одной
+транзакцией; ошибки откатывают её целиком. Строка заявки блокируется при редактировании и отправке.
+
+Миграция `stage3_debt_payment` добавляет необязательное поле и ограничение неотрицательного значения, сохраняя заявки.
+Форма уже поддерживает новое поле; экран результата показывает причины, условия и повтор недоступной проверки.
 
 ## Миграции
 
@@ -63,16 +97,36 @@ alembic upgrade head
 
 ## Тесты
 
-Нужен PostgreSQL (в тестах используется отдельная база, имя **обязательно** на `_test`, её схема пересоздаётся):
+Модульные тесты выполняются без работающей БД:
 
 ```bash
-docker compose up -d db
-docker compose exec db createdb -U credit_app credit_test
-cd backend && pip install -r requirements-dev.txt
-TEST_DATABASE_URL=postgresql+psycopg://credit_app:<POSTGRES_PASSWORD>@localhost:5432/credit_test pytest
+cd backend
+pip install -r requirements-dev.txt
+python -m pytest -q -m "not integration"
 ```
-Порт 5432 в compose наружу не открыт; для тестов с хоста добавьте в сервис `db` строку
-`ports: ["127.0.0.1:5432:5432"]`, либо запускайте pytest внутри контейнера `api`.
+
+Для полного прогона нужен PostgreSQL и отдельная база с именем на `_test`. Её схема пересоздаётся.
+`SECRET_KEY` и `SEED_PASSWORD` в тестах задаются фиксированными тестовыми значениями.
+
+```bash
+TEST_DATABASE_URL=postgresql+psycopg://credit_app:password@localhost:5432/credit_test python -m pytest -q
+DATABASE_URL=postgresql+psycopg://credit_app:password@localhost:5432/credit_test alembic check
+```
+
+Порт БД в основном Compose закрыт. Для локального полного прогона можно поднять отдельный контейнер:
+
+```bash
+docker run --name credit-stage3-test-db --rm -d \
+  -e POSTGRES_USER=credit_app -e POSTGRES_PASSWORD=password -e POSTGRES_DB=credit_test \
+  -p 127.0.0.1:5432:5432 postgres:17
+# После готовности pg_isready выполнить команды pytest выше.
+# Остановить только тестовую базу:
+docker stop credit-stage3-test-db
+```
+
+Без `TEST_DATABASE_URL` интеграционные тесты явно пропускаются. GitHub Actions запускает весь набор на PostgreSQL 17,
+проверяет соответствие миграций моделям и собирает Docker-образ. Тесты покрывают три решения, повтор обработки,
+права доступа, точный платёж, откат транзакции и конкурентную отправку.
 
 ## Структура
 
@@ -87,5 +141,5 @@ backend/app/
   deps.py          «кто делает запрос», проверка роли
   seed.py          тестовые данные (идемпотентный)
   routers/         health, auth, products, companies, applications, staff
-  services/        checks (validate_application — готово), scoring, decisions — этап 3
+  services/        checks (валидация и проверки), scoring (риск), decisions (решение), events (история)
 ```
